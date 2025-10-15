@@ -7,3 +7,9 @@ TVLA is a statistical method used in Differential Power Analysis (DPA) to detect
 ## Mutual Information Analysis
 
 Mutual Information (MI) Analysis is a statistical method to detect side-channel leakage in cryptographic devices by measuring the dependency between power traces and a leakage model (e.g., Hamming weight of plaintext bytes). This implementation computes MI for each time point across 16 bytes of AES-128 plaintexts, identifying high-MI points as potential leakage sites.
+
+## Correlation Power Analysis
+
+Correlation Power Analysis(CPA) uses an intermediate value(Output of the 1st SBOX operation) that is a function of part of the key and known data. The power consumption of the devices when the intermediate value is processed is estimated for each key guess. Correlation is then used to find out which key was most likely used by correlating the hypothetical power and the real power consumption. Below image shows that correlation of Hamming weight of the 1st SBOX operation and power consumption during that interval is positive and able to extract the correct key. 
+
+![cpa](https://github.com/user-attachments/assets/358df3a0-ef30-437b-8ef2-0012eb91928e)
