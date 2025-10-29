@@ -1,144 +1,109 @@
-# Stochastic Model for Differential Power Analysis: Implementation Guide
-A step-by-step explanation of the stochastic model for Differential Power Analysis (DPA) as described in the research paper "A Stochastic Model for Differential Side Channel Cryptanalysis" by Werner Schindler, Kerstin Lemke, and Christof Paar. The explanation focuses on:
-- Forming the basis functions for the vector subspace approximation.
-- How these basis functions are used in the profiling phase.
-- How the overall attack works.
+# Stochastic Differential Side-Channel Analysis (DSCA)
 
-## Overview of the Stochastic Model (From the Paper)
-- **Leakage Model**: At time \( t \), the trace sample is \( I_t(x, k) = h_t(x, k) + R_t \), where \( h_t \) is deterministic data-dependent leakage, and \( R_t \) is noise (Eq. 1).
-- **Subspace Approximation**: Approximate \( h_t \) in a low-dimensional vector subspace \( \mathcal{F}_{u;t} \) spanned by basis functions \( g_{j,t} \) (Eq. 4), using coefficients \( \beta \): \( \tilde{h}_t^*(x, k) = \sum \beta_j g_{j,t}(x, k) \) (Eq. 9).
-- **EIS Property**: Basis depends on \( \phi = x \oplus k \) (Definition 2, Lemma 1), allowing profiling with one key.
-- **Bit-Wise Model**: Basis = constant + bits of S-Box[\( \phi \)] (Section 3.1, F5 for 4-bit analog to F9).
+This repository provides an implementation of the **Stochastic Model for Differential Side-Channel Cryptanalysis (DSCA)**, based on the work of *Schindler, Lemke, and Paar*.
+The stochastic model combines statistical regression and side-channel analysis to efficiently approximate leakage behavior and recover secret keys with fewer traces than traditional template attacks.
 
-The attack has two phases: profiling (estimate \( \beta \)) and extraction (guess key using minimum or ML principle).
+---
 
-## Step 1: Forming the Basis Functions
-The basis functions quantify expected leakage from intermediates (e.g., bits of S-Box output). Precompute a matrix G (16x5 for 4-bit) for all \( \phi \) (0-15).
+## Overview
 
-### Steps to Form Basis Functions
-1. **Define S-Box**: Use the paper's bit-wise model (Section 3.1: selection function S(\( \phi \)), where \( \phi = x \oplus k \)).
+The stochastic DSCA method models the side-channel leakage as a linear combination of predefined **basis functions**, enabling efficient profiling and key extraction.
+It consists of three major stages:
 
-2. **Precompute G Matrix**:
-   - For each \( \phi = 0 \) to 15:
-     - Compute S-Box[\( \phi \)] (integer).
-     - Convert to 4-bit binary (MSB to LSB as floats 0.0/1.0).
-     - G[\( \phi \)] = [1.0 (constant)] + [bit0, bit1, bit2, bit3].
-   - This exploits EIS (Lemma 1: leakage same for equivalent \( \phi \)).
+1. **Basis Function Selection**
+2. **Profiling Phase**
+3. **Key Extraction Phase**
 
-3. **Output**: G (16x5 matrix), rows for \( \phi \), columns for basis.
+---
 
-### Code Implementation
-```python
-class BasisFunctions:
-    def __init__(self, sbox):
-        self.sbox = sbox
-        self.num_basis = 5  # u=5: constant + 4 bits
-        self.G = self._build_basis_matrix()
+## 1. Basis Function Selection
 
-     def _build_basis_matrix(self):
-        G = np.zeros((16, self.num_basis), dtype=float)
-        for phi in range(16):
-            sbox_output = self.sbox[phi]
-            if(self.basis_type == 'bits'):
-                G[phi] = [1.0]+[float(i) for i in format(sbox_output, '04b')]
-            elif(self.basis_type == 'hw_bits'):
-                G[phi] = [1.0] + [float(i) for i in format(bin(sbox_output).count('1'),'04b')]
-        return G
-```
+The leakage model assumes that the observed signal ( I_t(x,k) ) can be decomposed as:
 
-- **Example G for Custom S-Box**: For \( \phi = 7 \), S-Box[7]=10 (0xA, binary '1010') → G[7] = [1.0, 1.0, 0.0, 1.0, 0.0].
+$I_t(x,k) = h_t(x,k) + R_t$
 
-## Step 2: Using Basis Functions in Profiling
-Profiling estimates \( \beta \) per time t (Theorem 3: least-squares minimization, Eq. 11-13) using known key k_b and traces.
+where ($h_t(x,k)$) is the deterministic (data-dependent) component and ($R_t$) represents noise.
 
-### Steps in Profiling
-1. **Compute Intermediates**: phi_prof = x_prof XOR k_b (N1 x 1).
+To approximate ($h_t(x,k)$), a set of **basis functions** (${ g_{0,t}, g_{1,t}, \dots, g_{u-1,t}}$ ) is defined.
+Typical choices include:
 
-2. **Form Design Matrix**: G_prof = G[phi_prof] (N1 x 5, A in Eq. 11).
+* `hw`: Hamming Weight
+* `hw_bits`: Bit-wise decomposition of the Hamming weight
+* `bits`: Individual bits of S-box output
+* `lsb`: Least Significant Bit
 
-3. **Fit Betas per Time t**:
-   - For each t in segment:
-     - i_t = traces_prof[:, t] (N1 x 1).
-     - beta_t = lstsq(G_prof, i_t) (solves (G_prof^T G_prof) beta = G_prof^T i_t, Eq. 12).
-   - betas: segment_length x 5 matrix.
+The leakage function is modeled as:
 
-4. **Select Time Points**: Compute norm_b = norm(betas[:,1:]) per t (exclude constant). Use modes S1-S6 (Section 3.3, threshold τ).
+$h_t^*(x,k) = \sum_{j=0}^{u-1} \beta_{j,t}, g_{j,t}(x,k)$  
+where ($\beta_{j,t}$) are coefficients estimated during profiling.
 
-5. **(Optional) Covariance**: For ML, residuals = traces_noise[:, ts] - predicted h (Eq. 14).
+---
 
-### Code Implementation
-```python
-class Profiling:
-    def __init__(self, basis_functions):
-        self.basis_functions = basis_functions
-        self.betas = None
-        self.ts = None
-        self.cov = None
+## Profiling Phase
 
-    def estimate_betas(self, traces_prof, x_prof, k_b, start_time, end_time):
-        N1 = len(x_prof)
-        phi_prof = np.bitwise_xor(x_prof, k_b) & 0x0F
-        G_prof = self.basis_functions.G[phi_prof]
-        segment_length = end_time - start_time
-        self.betas = np.zeros((segment_length, 5), dtype=float)
-        self.start_time = start_time
-        for t_rel, t_abs in enumerate(range(start_time, end_time)):
-            i_t = traces_prof[:, t_abs]
-            beta_t, _, _, _ = lstsq(G_prof, i_t, lapack_driver='gelsy')
-            self.betas[t_rel] = beta_t
+The **profiling phase** builds the regression model that estimates the deterministic part of the leakage.
 
-    # select_time_points and estimate_covariance as in code...
-```
+1. **Data Collection:**
 
-- **Alignment with Paper**: Fits h^* (Theorem 2), separate per t (Theorem 1(ii)).
+   * Collect ($N_1$) profiling traces under a known key ($k_b$).
+   * Each trace corresponds to known plaintexts ($x_i$).
 
-## Step 3: How the Attack Works
-The attack has profiling (known key) and extraction (guess key) phases.
+2. **Coefficient Estimation:**
+   Using least-squares regression:
+   
+   $\beta_t = (G^\top G)^{-1} G^\top I_t$,
+   
+   where:
 
-### Steps in the Attack
-1. **Profiling Phase** (Section 2.2):
-   - Form basis G (as above).
-   - Estimate betas (as above).
-   - Select ts where norm_b high (Section 3.3).
-   - (For ML) Estimate cov from residuals.
+   * ($I_t$) is the measured leakage vector at time ($t$).
+   * ($G$) is the basis matrix constructed from the selected basis functions.
 
-2. **Key Extraction Phase** (Section 2.3):
-   - For each hypothesis k' (0-15):
-     - Compute phi_j = x_attack[j] XOR k' for each attack trace j.
-     - Predict h_j = G[phi_j] @ betas[ts] (m x 1 per trace).
-     - Observe i_j = traces_attack[j, ts] (m x 1).
-     - Minimum: Sum/avg (i_j - h_j)^2 over j and m (Eq. 19).
-     - ML: Sum delta^T cov_inv delta (Eq. 16).
-   - Pick k' with min value (correct minimizes expected error, Eq. 18).
+3. **Deterministic Leakage Estimation:**
+   The approximated leakage is then:
+   
+   $\hat{h}_t(x,k_b) = G(\phi(x,k_b)) , \beta_t$.
+   
 
-3. **Success Rate Evaluation**: Repeat with subsets, compute % correct guesses (paper Table 1).
+4. **Time Point Selection:**
+   Compute the coefficient norm ( $| \beta_t |$ ) across all time instants and select points with the strongest data dependence for key extraction.
 
-### Code Implementation (Extraction)
-```python
-class KeyExtraction:
-    def __init__(self, profiling):
-        self.profiling = profiling
-        # ... (as in code)
+5. **Noise Covariance Estimation (Optional):**
+   For the maximum-likelihood approach, compute the covariance matrix ( C ) from the residuals:
+   
+   $r_{i,t} = I_t(x_i,k_b) - \hat{h}_t(x_i,k_b)$.
 
-    def extract_key(self, traces_attack, x_attack, N3, method='minimum'):
-        m = len(self.ts)
-        G = self.basis_functions.G
-        min_diff = float('inf')
-        best_k = None
-        for k_prime in range(16):
-            diff = 0.0
-            for j in range(N3):
-                phi_j = np.bitwise_xor(x_attack[j], k_prime) & 0x0F
-                h_j = np.array([G[phi_j] @ self.betas[t] for t in self.ts])
-                i_j = traces_attack[j, self.ts]
-                diff += np.sum((i_j - h_j) ** 2)
-            avg_diff = diff / N3
-            if avg_diff < min_diff:
-                min_diff = avg_diff
-                best_k = k_prime
-        return best_k
-```
 
-- **Alignment with Paper**: Minimum principle (Eq. 19), uses betas from profiling.
+---
 
-For full attack, run `run_stochastic_dpa` (as in code). Test with known key traces to validate.
+## Key Extraction Phase
+
+In this phase, ($N_3$) traces are collected from the **target device** under an **unknown key** ($k^\circ$).
+
+For each candidate key ( k' ):
+
+$\hat{I}_t(x,k') = G(\phi(x,k')) , \beta_t$.
+
+
+### Minimum Principle
+
+The correct key minimizes the mean squared error:
+
+$k^* = \arg\min_{k'} \frac{1}{N_3} \sum_{j=1}^{N_3}
+| I_t(x_j,k^\circ) - \hat{I}_t(x_j,k') |^2$.
+
+
+### Maximum Likelihood Principle
+
+If the noise is Gaussian with covariance matrix ( C ):
+
+$k^* = \arg\min_{k'} 
+\sum_{j=1}^{N_3}
+\left( 
+\big(i^{(j)} - \tilde{h}_t(x_j, k')\big)^\top 
+C^{-1} 
+\big(i^{(j)} - \tilde{h}_t(x_j, k')\big)
+\right)$
+
+The **maximum likelihood principle** provides better robustness in noisy environments, while the **minimum principle** offers faster computation.
+
+---
